@@ -2215,79 +2215,85 @@
         drawnItems.removeLayer(layer);
       });
     }
-    // ====================================================
+// ====================================================
     // Firebase 受信同期（他の人の操作を画面に反映）
     // ====================================================
     mapObjectsRef.on('child_added', function(snapshot) {
       const key = snapshot.key;
       const data = snapshot.val();
+      if (!data) return;
 
+      // すでに画面にある場合は二重作成しない
       let exists = false;
       drawnItems.eachLayer(l => {
         if (l._firebaseKey === key) exists = true;
       });
       if (exists) return;
 
-      const p = data.props;
+      const p = data.props || {};
       let newLayer = null;
 
-      if (data.type === 'marker') {
-        if (p.isTextOnly) {
-          newLayer = L.marker(data.latlng, {
-            icon: createTextOnlyIcon(p.label, p.textColor, p.bgColor, p.fontSize)
+      try {
+        if (data.type === 'marker') {
+          if (p.isTextOnly) {
+            newLayer = L.marker(data.latlng, {
+              icon: createTextOnlyIcon(p.label, p.textColor, p.bgColor, p.fontSize)
+            });
+          } else {
+            newLayer = L.marker(data.latlng, {
+              icon: createCustomShapeIcon(p.iconType, p.color, p.markerSize)
+            });
+          }
+        } else if (data.type === 'polyline') {
+          newLayer = L.polyline(data.latlngs, {
+            color: p.color || '#ff0000',
+            weight: parseInt(p.lineWidth, 10) || 4,
+            lineCap: 'butt'
           });
-        } else {
-          newLayer = L.marker(data.latlng, {
-            icon: createCustomShapeIcon(p.iconType, p.color, p.markerSize)
+        } else if (data.type === 'polygon' || data.type === 'rectangle') {
+          newLayer = L.polygon(data.latlngs, {
+            color: p.color || '#ff0000',
+            fillColor: p.color || '#ff0000',
+            fillOpacity: 0.2
+          });
+        } else if (data.type === 'circle') {
+          newLayer = L.circle(data.circleLatLng, {
+            radius: data.radius || 50,
+            color: p.color || '#ff0000',
+            fillColor: p.color || '#ff0000',
+            fillOpacity: 0.2
           });
         }
-      } else if (data.type === 'polyline') {
-        newLayer = L.polyline(data.latlngs, {
-          color: p.color,
-          weight: parseInt(p.lineWidth, 10) || 4,
-          lineCap: 'butt'
-        });
-      } else if (data.type === 'polygon' || data.type === 'rectangle') {
-        newLayer = L.polygon(data.latlngs, {
-          color: p.color,
-          fillColor: p.color,
-          fillOpacity: 0.2
-        });
-      } else if (data.type === 'circle') {
-        newLayer = L.circle(data.circleLatLng, {
-          radius: data.radius,
-          color: p.color,
-          fillColor: p.color,
-          fillOpacity: 0.2
-        });
-      }
 
-      if (newLayer) {
-        newLayer._firebaseKey = key;
-        newLayer.isTextOnly = !!p.isTextOnly;
-        newLayer.customIconType = p.iconType;
-        newLayer.customLineType = p.lineType;
-        newLayer.customLineWidth = p.lineWidth;
-        newLayer.customLabel = p.label;
-        newLayer.customDetailMemo = p.detailMemo;
-        newLayer.customColor = p.color;
-        newLayer.customTextColor = p.textColor;
-        newLayer.customBgColor = p.bgColor;
-        newLayer.customMarkerSize = p.markerSize;
-        newLayer.customFontSize = p.fontSize;
+        if (newLayer) {
+          newLayer._firebaseKey = key;
+          newLayer.isTextOnly = !!p.isTextOnly;
+          newLayer.customIconType = p.iconType;
+          newLayer.customLineType = p.lineType;
+          newLayer.customLineWidth = p.lineWidth;
+          newLayer.customLabel = p.label || "";
+          newLayer.customDetailMemo = p.detailMemo || "";
+          newLayer.customColor = p.color || "#ff0000";
+          newLayer.customTextColor = p.textColor || "#000000";
+          newLayer.customBgColor = p.bgColor || "#ffffff";
+          newLayer.customMarkerSize = p.markerSize || 32;
+          newLayer.customFontSize = p.fontSize || 13;
 
-        drawnItems.addLayer(newLayer);
+          drawnItems.addLayer(newLayer);
 
-        if (newLayer instanceof L.Polyline && !(newLayer instanceof L.Polygon)) {
-          updatePolylineArrowHead(newLayer);
+          if (newLayer instanceof L.Polyline && !(newLayer instanceof L.Polygon)) {
+            updatePolylineArrowHead(newLayer);
+          }
+
+          if (newLayer instanceof L.Marker && newLayer.dragging) {
+            newLayer.dragging.enable();
+          }
+
+          const mode = document.getElementById('textDisplayMode').value;
+          applyTextMode(newLayer, p.label, p.detailMemo, p.textColor, p.bgColor, p.fontSize, mode);
         }
-
-        if (newLayer instanceof L.Marker && newLayer.dragging) {
-          newLayer.dragging.enable();
-        }
-
-        const mode = document.getElementById('textDisplayMode').value;
-        applyTextMode(newLayer, p.label, p.detailMemo, p.textColor, p.bgColor, p.fontSize, mode);
+      } catch (err) {
+        console.error("オブジェクトの復元に失敗しました:", err);
       }
     });
 
