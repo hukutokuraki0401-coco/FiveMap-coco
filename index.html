@@ -1730,34 +1730,72 @@
       newRef.set(objData);
     });
 
-    // 3. マップ画像読み込み
-    function loadMapImage(src) {
-      const img = new Image();
-      img.onload = function() {
-        const w = this.width;
-        const h = this.height;
-        currentImageOriginalWidth = w;
-        currentImageOriginalHeight = h;
-        const bounds = [[0, 0], [h, w]];
-
-        if (currentOverlay) map.removeLayer(currentOverlay);
-
-        currentOverlay = L.imageOverlay(src, bounds).addTo(map);
-        map.fitBounds(bounds);
-        currentMapImageDataUrl = src;
-      };
-      img.src = src;
-    }
-
+// 3. マップ画像読み込み & Firebase同期送信
     document.getElementById('imageLoader').addEventListener('change', function(e) {
       const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = function(event) { loadMapImage(event.target.result); };
-        reader.readAsDataURL(file);
-      }
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const rawSrc = event.target.result;
+        
+        // 転送用に画像を適正サイズに圧縮してFirebaseへ送信
+        const tempImg = new Image();
+        tempImg.onload = function() {
+          const maxDim = 2560; // 長辺の最大解像度（作戦マップとして十分高精細なサイズ）
+          let w = tempImg.width;
+          let h = tempImg.height;
+
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(tempImg, 0, 0, w, h);
+
+          // 軽量化したJPEGデータ（画質0.85）を生成
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+          // 自分の画面に即時反映
+          loadMapImage(compressedDataUrl);
+
+          // Firebaseへ保存（他メンバー全員に即時反映）
+          db.ref('current_map_image').set(compressedDataUrl, function(error) {
+            if (error) {
+              console.error("マップ画像の同期送信に失敗しました:", error);
+              alert("画像の容量が大きすぎるため同期できませんでした。もう少し小さい画像をお試しください。");
+            } else {
+              console.log("マップ画像の同期送信が完了しました！");
+            }
+          });
+        };
+        tempImg.src = rawSrc;
+      };
+      reader.readAsDataURL(file);
     });
 
+    // Firebaseからマップ画像の変更を受信して同期
+    db.ref('current_map_image').on('value', function(snapshot) {
+      const imgData = snapshot.val();
+      // まだ画像が設定されていない場合はスキップ
+      if (!imgData) return;
+
+      // 既に同じ画像を表示している場合は再読み込みしない
+      if (imgData !== currentMapImageDataUrl) {
+        console.log("📥 新しいマップ画像を受信しました");
+        loadMapImage(imgData);
+      }
+    });
+    
     loadMapImage('https://placehold.jp/30/333344/ffffff/1920x1080.png?text=Select+Your+Map+Image');
 
     // 4. データ保存・復元（GeoJSON対応）
