@@ -1730,58 +1730,42 @@
       newRef.set(objData);
     });
 
-// 3. マップ画像読み込み & Firebase同期送信
-    document.getElementById('imageLoader').addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (!file) return;
+// 3. マップ画像読み込み（リセット・再センタリング対応版）
+    function loadMapImage(src) {
+      const img = new Image();
+      img.onload = function() {
+        const w = this.width;
+        const h = this.height;
+        currentImageOriginalWidth = w;
+        currentImageOriginalHeight = h;
+        const bounds = [[0, 0], [h, w]];
 
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        const rawSrc = event.target.result;
-        
-        // 転送用に画像を適正サイズに圧縮してFirebaseへ送信
-        const tempImg = new Image();
-        tempImg.onload = function() {
-          const maxDim = 2560; // 長辺の最大解像度（作戦マップとして十分高精細なサイズ）
-          let w = tempImg.width;
-          let h = tempImg.height;
+        // 古い画像レイヤーを確実に破棄
+        if (currentOverlay) {
+          map.removeLayer(currentOverlay);
+          currentOverlay = null;
+        }
 
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
-            }
-          }
+        // 新しい画像をマップに追加
+        currentOverlay = L.imageOverlay(src, bounds).addTo(map);
+        currentMapImageDataUrl = src;
 
-          const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(tempImg, 0, 0, w, h);
+        // 画像の端から端までがぴったり画面に収まるようにカメラを強制移動
+        map.setMaxBounds(bounds);
+        map.fitBounds(bounds, { animate: false });
 
-          // 軽量化したJPEGデータ（画質0.85）を生成
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        // 画像の上にピンや図形が隠れないよう、作図レイヤーを最前面に持ってくる
+        if (map.hasLayer(drawnItems)) {
+          drawnItems.bringToFront();
+        }
+        if (map.hasLayer(arrowHeadGroup)) {
+          arrowHeadGroup.bringToFront();
+        }
 
-          // 自分の画面に即時反映
-          loadMapImage(compressedDataUrl);
-
-          // Firebaseへ保存（他メンバー全員に即時反映）
-          db.ref('current_map_image').set(compressedDataUrl, function(error) {
-            if (error) {
-              console.error("マップ画像の同期送信に失敗しました:", error);
-              alert("画像の容量が大きすぎるため同期できませんでした。もう少し小さい画像をお試しください。");
-            } else {
-              console.log("マップ画像の同期送信が完了しました！");
-            }
-          });
-        };
-        tempImg.src = rawSrc;
+        console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
       };
-      reader.readAsDataURL(file);
-    });
+      img.src = src;
+    }
 
     // Firebaseからマップ画像の変更を受信して同期
     db.ref('current_map_image').on('value', function(snapshot) {
