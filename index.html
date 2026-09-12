@@ -1762,18 +1762,70 @@
           arrowHeadGroup.bringToFront();
         }
 
-        console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
+console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
       };
       img.src = src;
     }
 
+    // ↓↓↓ ここから追加 ↓↓↓
+    // マップ画像選択時に圧縮してFirebaseへ送信する処理
+    document.getElementById('imageLoader').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const rawSrc = event.target.result;
+
+        // 容量制限（Firebaseの通信上限）を回避するために長辺2048px以下にリサイズ
+        const tempImg = new Image();
+        tempImg.onload = function() {
+          const maxDim = 2048;
+          let w = tempImg.width;
+          let h = tempImg.height;
+
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(tempImg, 0, 0, w, h);
+
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+          // 自分の画面に反映
+          loadMapImage(compressedDataUrl);
+
+          // Firebaseへ保存（相手の画面にも即時配信）
+          db.ref('current_map_image').set(compressedDataUrl, function(error) {
+            if (error) {
+              console.error("画像の同期送信に失敗しました:", error);
+              alert("画像の容量が大きすぎるため同期できませんでした。");
+            } else {
+              console.log("✅ マップ画像をFirebaseへ送信しました");
+            }
+          });
+        };
+        tempImg.src = rawSrc;
+      };
+      reader.readAsDataURL(file);
+    });
+    // ↑↑↑ ここまで追加 ↑↑↑
+
     // Firebaseからマップ画像の変更を受信して同期
     db.ref('current_map_image').on('value', function(snapshot) {
       const imgData = snapshot.val();
-      // まだ画像が設定されていない場合はスキップ
       if (!imgData) return;
 
-      // 既に同じ画像を表示している場合は再読み込みしない
       if (imgData !== currentMapImageDataUrl) {
         console.log("📥 新しいマップ画像を受信しました");
         loadMapImage(imgData);
