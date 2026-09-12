@@ -1754,12 +1754,14 @@
         map.setMaxBounds(bounds);
         map.fitBounds(bounds, { animate: false });
 
-        // 画像の上にピンや図形が隠れないよう、作図レイヤーを最前面に持ってくる
+        // 画像の上にピンや図形が隠れないよう、作図レイヤーを手前に再配置
         if (map.hasLayer(drawnItems)) {
           drawnItems.bringToFront();
         }
         if (map.hasLayer(arrowHeadGroup)) {
-          arrowHeadGroup.bringToFront();
+          arrowHeadGroup.eachLayer(function(layer) {
+            if (layer.bringToFront) layer.bringToFront();
+          });
         }
 
 console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
