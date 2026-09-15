@@ -1703,6 +1703,13 @@
 
       if (layer instanceof L.Marker && layer.dragging) {
         layer.dragging.enable();
+        layer.on('dragend', function() {
+          if (layer._firebaseKey) {
+            mapObjectsRef.child(layer._firebaseKey).update({
+              latlng: layer.getLatLng()
+            });
+          }
+        });
       }
 
       applyTextMode(layer, layer.customLabel, layer.customDetailMemo, layer.customTextColor, layer.customBgColor, layer.customFontSize, displayMode);
@@ -1904,67 +1911,100 @@
       };
     }
 
-    function restoreFromGeoJson(data) {
+  async function restoreFromGeoJson(data) {
       arrowHeadGroup.clearLayers();
       drawnItems.clearLayers();
       clearMarkerSelection();
       const displayMode = document.getElementById('textDisplayMode').value;
 
-      L.geoJSON(data, {
-        pointToLayer: function (feature, latlng) {
-          const props = feature.properties || {};
-          const isTextOnly = !!props.isTextOnly;
-          const iconType = props.iconType || 'pin';
-          const color = props.color || "#ff0000";
-          const textColor = props.textColor || "#000000";
-          const bgColor = props.bgColor || "#ffffff";
-          const size = props.markerSize || 32;
-          const fontSize = props.fontSize || 13;
-          const label = props.label || props.memo || "";
+      // 1. Firebase に現在ある古いオブジェクトを全消去（全員の画面から一旦消す）
+      await mapObjectsRef.remove();
 
-          if (isTextOnly) {
-            const marker = L.marker(latlng, { icon: createTextOnlyIcon(label, textColor, bgColor, fontSize) });
-            marker.isTextOnly = true;
-            return marker;
+      // 2. data.json のオブジェクトを解析して画面描画 ＆ Firebaseへ送信
+      if (!data || !data.features) return;
+
+      for (const feature of data.features) {
+        const props = feature.properties || {};
+        const geom = feature.geometry || {};
+        let newLayer = null;
+        let objType = 'marker';
+        let latlng = null;
+        let latlngs = null;
+
+        if (geom.type === 'Point') {
+          // GeoJSONは [経度, 緯度] の順なので [lat, lng] に戻す
+          latlng = L.latLng(geom.coordinates[1], geom.coordinates[0]);
+          objType = 'marker';
+
+          if (props.isTextOnly) {
+            newLayer = L.marker(latlng, { icon: createTextOnlyIcon(props.label, props.textColor, props.bgColor, props.fontSize) });
+            newLayer.isTextOnly = true;
           } else {
-            return L.marker(latlng, { icon: createCustomShapeIcon(iconType, color, size) });
+            newLayer = L.marker(latlng, { icon: createCustomShapeIcon(props.iconType, props.color, props.markerSize) });
           }
-        },
-        style: function (feature) {
-          const props = feature.properties || {};
-          return { 
-            color: props.color || "#ff0000",
+        } else if (geom.type === 'LineString') {
+          objType = 'polyline';
+          latlngs = geom.coordinates.map(pt => L.latLng(pt[1], pt[0]));
+          newLayer = L.polyline(latlngs, {
+            color: props.color || '#ff0000',
             weight: parseInt(props.lineWidth, 10) || 4,
             lineCap: 'butt'
-          };
-        },
-        onEachFeature: function(feature, layer) {
-          const props = feature.properties || {};
-          layer.isTextOnly = !!props.isTextOnly;
-          layer.customIconType = props.iconType || 'pin';
-          layer.customLineType = props.lineType || 'line';
-          layer.customLineWidth = props.lineWidth || 4;
-          layer.customLabel = props.label || props.memo || "";
-          layer.customDetailMemo = props.detailMemo || "";
-          layer.customColor = props.color || "#ff0000";
-          layer.customTextColor = props.textColor || "#000000";
-          layer.customBgColor = props.bgColor || "#ffffff";
-          layer.customMarkerSize = props.markerSize || 32;
-          layer.customFontSize = props.fontSize || 13;
-
-          drawnItems.addLayer(layer);
-
-          if (layer instanceof L.Polyline && !(layer instanceof L.Polygon)) {
-            updatePolylineArrowHead(layer);
-          }
-
-          if (layer instanceof L.Marker && layer.dragging) {
-            layer.dragging.enable();
-          }
-
-          applyTextMode(layer, layer.customLabel, layer.customDetailMemo, layer.customTextColor, layer.customBgColor, layer.customFontSize, displayMode);
+          });
+        } else if (geom.type === 'Polygon') {
+          objType = 'polygon';
+          latlngs = geom.coordinates[0].map(pt => L.latLng(pt[1], pt[0]));
+          newLayer = L.polygon(latlngs, {
+            color: props.color || '#ff0000',
+            fillColor: props.color || '#ff0000',
+            fillOpacity: 0.2
+          });
         }
-      });
+
+        if (newLayer) {
+          newLayer.isTextOnly = !!props.isTextOnly;
+          newLayer.customIconType = props.iconType || 'pin';
+          newLayer.customLineType = props.lineType || 'line';
+          newLayer.customLineWidth = props.lineWidth || 4;
+          newLayer.customLabel = props.label || "";
+          newLayer.customDetailMemo = props.detailMemo || "";
+          newLayer.customColor = props.color || "#ff0000";
+          newLayer.customTextColor = props.textColor || "#000000";
+          newLayer.customBgColor = props.bgColor || "#ffffff";
+          newLayer.customMarkerSize = props.markerSize || 32;
+          newLayer.customFontSize = props.fontSize || 13;
+
+          // Firebaseへ登録して同期キーを付与
+          const newRef = mapObjectsRef.push();
+          newLayer._firebaseKey = newRef.key;
+
+          const syncData = {
+            type: objType,
+            latlng: latlng,
+            latlngs: latlngs,
+            props: props
+          };
+          await newRef.set(syncData);
+
+          drawnItems.addLayer(newLayer);
+
+          if (newLayer instanceof L.Polyline && !(newLayer instanceof L.Polygon)) {
+            updatePolylineArrowHead(newLayer);
+          }
+
+          if (newLayer instanceof L.Marker && newLayer.dragging) {
+            newLayer.dragging.enable();
+            newLayer.on('dragend', function() {
+              if (newLayer._firebaseKey) {
+                mapObjectsRef.child(newLayer._firebaseKey).update({
+                  latlng: newLayer.getLatLng()
+                });
+              }
+            });
+          }
+
+          applyTextMode(newLayer, newLayer.customLabel, newLayer.customDetailMemo, newLayer.customTextColor, newLayer.customBgColor, newLayer.customFontSize, displayMode);
+        }
+      }
     }
 
 // 5. フォルダ保存・復元処理
@@ -2362,10 +2402,20 @@
     // ====================================================
     // Firebase 受信同期（他の人の操作を画面に反映）
     // ====================================================
-    mapObjectsRef.on('child_added', function(snapshot) {
+    // 誰かがピンの位置や内容を編集・移動したとき
+    mapObjectsRef.on('child_changed', function(snapshot) {
       const key = snapshot.key;
       const data = snapshot.val();
       if (!data) return;
+
+      drawnItems.eachLayer(layer => {
+        if (layer._firebaseKey === key) {
+          // マーカーの位置更新
+          if (data.latlng && layer instanceof L.Marker) {
+            layer.setLatLng(data.latlng);
+          }
+        }
+      });
 
       // すでに画面にある場合は二重作成しない
       let exists = false;
@@ -2431,6 +2481,13 @@
 
           if (newLayer instanceof L.Marker && newLayer.dragging) {
             newLayer.dragging.enable();
+            newLayer.on('dragend', function() {
+              if (newLayer._firebaseKey) {
+                mapObjectsRef.child(newLayer._firebaseKey).update({
+                  latlng: newLayer.getLatLng()
+                });
+              }
+            });
           }
 
           const mode = document.getElementById('textDisplayMode').value;
