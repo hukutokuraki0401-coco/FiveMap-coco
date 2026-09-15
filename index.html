@@ -15,9 +15,7 @@
   <!-- HTMLヘッダーに Firebase SDK を追加 -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
-
-
+  
   <style>
     body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
     #toolbar { padding: 8px 12px; background: #222; color: #fff; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 1000; font-size: 13px; }
@@ -295,7 +293,8 @@
   </style>
 </head>
 <body>
-
+  
+  <div id="toolbar">
     <!-- マップ画像切り替えプルダウン -->
     <label style="display: flex; align-items: center; gap: 4px;">
       <span>🗺️ マップ:</span>
@@ -467,33 +466,6 @@
     </div>
   </div>
 
-  <!-- マップ選択・追加モーダル -->
-  <div id="mapSelectModal" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 3000;">
-    <div style="background: #222; color: #eee; width: 450px; max-width: 90vw; border-radius: 8px; border: 1px solid #444; padding: 20px; box-sizing: border-box;">
-      <h3 style="margin-top: 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 8px;">🗺️ マップ画像の切り替え・登録</h3>
-      
-      <!-- 1. 登録済みマップから選択 -->
-      <label style="display: block; font-weight: bold; margin-bottom: 6px;">登録済みマップから選ぶ:</label>
-      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
-        <select id="registeredMapsSelect" style="flex: 1; padding: 6px;"></select>
-        <button type="button" class="export-btn" onclick="applySelectedRegisteredMap()">変更</button>
-      </div>
-
-      <hr style="border: 0; border-top: 1px solid #444; margin: 16px 0;">
-
-      <!-- 2. 新規画像をStorageに登録 -->
-      <label style="display: block; font-weight: bold; margin-bottom: 6px;">新規マップを追加（無圧縮でアップロード）:</label>
-      <input type="text" id="newMapNameInput" placeholder="マップ名（例: カヨ・ペリコ島、ロスサントス高画質）" style="width: 100%; padding: 6px; box-sizing: border-box; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; margin-bottom: 8px;">
-      <input type="file" id="newMapFileInput" accept="image/*" style="display: block; margin-bottom: 12px; font-size: 12px;">
-      <button type="button" id="uploadMapBtn" class="folder-btn" style="width: 100%; padding: 8px;" onclick="uploadNewMapToStorage()">Firebase Storage に保存して同期</button>
-
-      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
-        <button type="button" onclick="closeMapSelectModal()" style="background: #555;">キャンセル</button>
-      </div>
-    </div>
-  </div>
-
-  
   <script>
     // ====================================================
     // Firebase リアルタイム同期の初期化
@@ -1801,6 +1773,20 @@ console.log("🗺️ マップ画像を更新・再センタリングしまし�
       img.src = src;
     }
 
+    // Firebaseからマップ画像の変更を受信して同期（このブロックを追加）
+    db.ref('current_map_image').on('value', function(snapshot) {
+      const imgData = snapshot.val();
+      if (!imgData) return;
+
+      if (imgData !== currentMapImageDataUrl) {
+        console.log("📥 新しいマップ画像を受信しました");
+        loadMapImage(imgData);
+      }
+    });
+
+  // 初期ダミー画像の読み込み（ページを開いた瞬間に真っ黒にならないようにする）
+  loadMapImage('https://placehold.jp/30/333344/ffffff/1920x1080.png?text=Select+Your+Map+Image');
+    
     // ====================================================
     // Googleドライブ画像プリセット・同期管理
     // ====================================================
