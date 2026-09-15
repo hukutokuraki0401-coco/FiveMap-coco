@@ -294,7 +294,7 @@
 </head>
 <body>
   
-  
+  <div id="toolbar">
     <!-- マップ画像切り替えプルダウン -->
     <label style="display: flex; align-items: center; gap: 4px;">
       <span>🗺️ マップ:</span>
@@ -1792,18 +1792,28 @@ console.log("🗺️ マップ画像を更新・再センタリングしまし�
     // ====================================================
     const driveMapsRef = db.ref('drive_map_presets');
 
-    // Google ドライブの共有リンクを直リンクURLに自動変換する関数
+    // Google ドライブの共有リンクを強制最高画質の直リンクURLに変換する関数
     function convertToDirectDriveUrl(inputUrl) {
       if (!inputUrl) return "";
-      // 既に直リンク形式の場合はそのまま返す
-      if (inputUrl.includes('lh3.googleusercontent.com/d/')) {
-        return inputUrl.trim();
+      let fileId = null;
+
+      // 共有URL形式 (/d/XXXX/view など) からIDを取り出す
+      const match1 = inputUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match1 && match1[1]) {
+        fileId = match1[1];
+      } else {
+        // id=XXXX 形式から取り出す
+        const match2 = inputUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (match2 && match2[1]) {
+          fileId = match2[1];
+        }
       }
-      // https://drive.google.com/file/d/{FILE_ID}/view 形式からIDを抽出
-      const match = inputUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) {
-        return `https://lh3.googleusercontent.com/d/${match[1]}=s0`;
+
+      if (fileId) {
+        // Googleの再圧縮・縮小を一切通さず、元の生ファイルを直で読み込むURL
+        return `https://drive.google.com/uc?export=download&id=${fileId}`;
       }
+
       return inputUrl.trim();
     }
 
