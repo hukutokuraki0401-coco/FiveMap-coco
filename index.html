@@ -1651,7 +1651,7 @@
       });
     }
 
-    // 新規オブジェクト作成イベント
+// 新規オブジェクト作成イベント
     map.on(L.Draw.Event.CREATED, function (e) {
       const layer = e.layer;
       const type = e.layerType;
@@ -1663,86 +1663,55 @@
       const selectedIconType = document.getElementById('iconTypeSelect').value;
       const selectedLineWidth = document.getElementById('lineWidth').value;
       const selectedLineType = document.getElementById('lineTypeSelect').value;
-      const displayMode = document.getElementById('textDisplayMode').value;
-
-      layer.isTextOnly = false;
-      layer.customColor = selectedColor;
-      layer.customTextColor = selectedTextColor;
-      layer.customBgColor = selectedBgColor;
-      layer.customMarkerSize = selectedMarkerSize;
-      layer.customFontSize = selectedFontSize;
-      layer.customIconType = selectedIconType;
-      layer.customLineWidth = selectedLineWidth;
-      layer.customLineType = selectedLineType;
 
       if (type === 'marker') {
         saveCurrentIconPref();
-        layer.setIcon(createCustomShapeIcon(selectedIconType, selectedColor, selectedMarkerSize));
-      } else if (type === 'polyline') {
-        layer.setStyle({ color: selectedColor, weight: parseInt(selectedLineWidth, 10) || 4, lineCap: 'butt' });
-      } else if (layer.setStyle) {
-        // 多角形・四角形・円に色を適用
-        layer.setStyle({ 
-          color: selectedColor,
-          fillColor: selectedColor,
-          fillOpacity: 0.2
-        });
       }
 
       const label = prompt("アイコンにつける名前（ラベル・省略可）を入力:", "");
       const memo = prompt("詳細メモ（クリック時のみ表示・省略可）を入力:", "");
 
-      layer.customLabel = label || "";
-      layer.customDetailMemo = memo || "";
+      // 座標の整形
+      let latlng = null;
+      let latlngs = null;
+      let radius = null;
 
-      drawnItems.addLayer(layer);
-
-      if (type === 'polyline') {
-        updatePolylineArrowHead(layer);
+      if (type === 'marker') {
+        latlng = layer.getLatLng();
+      } else if (type === 'circle') {
+        latlng = layer.getLatLng();
+        radius = layer.getRadius();
+      } else if (type === 'polyline' || type === 'polygon' || type === 'rectangle') {
+        const rawLatLngs = layer.getLatLngs();
+        // 多角形は入れ子配列になっている場合があるためフラット化対応
+        latlngs = (type === 'polygon' || type === 'rectangle') ? rawLatLngs[0] : rawLatLngs;
       }
 
-      if (layer instanceof L.Marker && layer.dragging) {
-        layer.dragging.enable();
-        layer.on('dragend', function() {
-          if (layer._firebaseKey) {
-            mapObjectsRef.child(layer._firebaseKey).update({
-              latlng: layer.getLatLng()
-            });
-          }
-        });
-      }
-
-      applyTextMode(layer, layer.customLabel, layer.customDetailMemo, layer.customTextColor, layer.customBgColor, layer.customFontSize, displayMode);
-
-      if (layer instanceof L.Marker) {
-        selectMarker(layer);
-      }
-        // --- ここから追加：Firebaseへ送信 ---
       const objData = {
         type: type,
-        latlng: (type === 'marker') ? layer.getLatLng() : null,
-        latlngs: (type === 'polyline' || type === 'polygon' || type === 'rectangle') ? layer.getLatLngs() : null,
-        radius: (type === 'circle') ? layer.getRadius() : null,
-        circleLatLng: (type === 'circle') ? layer.getLatLng() : null,
+        latlng: latlng,
+        latlngs: latlngs,
+        radius: radius,
+        circleLatLng: (type === 'circle') ? latlng : null,
         props: {
-          isTextOnly: !!layer.isTextOnly,
-          iconType: layer.customIconType || 'pin',
-          lineType: layer.customLineType || 'line',
-          lineWidth: layer.customLineWidth || 4,
-          label: layer.customLabel || "",
-          detailMemo: layer.customDetailMemo || "",
-          color: layer.customColor || "#ff0000",
-          textColor: layer.customTextColor || "#000000",
-          bgColor: layer.customBgColor || "#ffffff",
-          markerSize: layer.customMarkerSize || 32,
-          fontSize: layer.customFontSize || 13
+          isTextOnly: false,
+          iconType: selectedIconType,
+          lineType: selectedLineType,
+          lineWidth: selectedLineWidth,
+          label: label || "",
+          detailMemo: memo || "",
+          color: selectedColor,
+          textColor: selectedTextColor,
+          bgColor: selectedBgColor,
+          markerSize: selectedMarkerSize,
+          fontSize: selectedFontSize
         }
       };
 
-      const newRef = mapObjectsRef.push();
-      layer._firebaseKey = newRef.key;
-      newRef.set(objData);
+      // Firebase に書き込む（自分も含め全員が child_added で画面に描画される）
+      mapObjectsRef.push(objData);
     });
+
 // 3. マップ画像読み込み（リセット・再センタリング対応版）
     function loadMapImage(src) {
       if (!src) return;
@@ -1911,99 +1880,54 @@
       };
     }
 
-  async function restoreFromGeoJson(data) {
-      arrowHeadGroup.clearLayers();
-      drawnItems.clearLayers();
-      clearMarkerSelection();
-      const displayMode = document.getElementById('textDisplayMode').value;
-
-      // 1. Firebase に現在ある古いオブジェクトを全消去（全員の画面から一旦消す）
-      await mapObjectsRef.remove();
-
-      // 2. data.json のオブジェクトを解析して画面描画 ＆ Firebaseへ送信
+    async function restoreFromGeoJson(data) {
       if (!data || !data.features) return;
 
+      // 1. Firebase に現在あるオブジェクトを全消去（全員の画面からクリア）
+      await mapObjectsRef.remove();
+
+      // 2. data.json の各図形を Firebase へ一括投入
       for (const feature of data.features) {
-        const props = feature.properties || {};
+        const p = feature.properties || {};
         const geom = feature.geometry || {};
-        let newLayer = null;
         let objType = 'marker';
         let latlng = null;
         let latlngs = null;
+        let radius = null;
 
         if (geom.type === 'Point') {
-          // GeoJSONは [経度, 緯度] の順なので [lat, lng] に戻す
-          latlng = L.latLng(geom.coordinates[1], geom.coordinates[0]);
           objType = 'marker';
-
-          if (props.isTextOnly) {
-            newLayer = L.marker(latlng, { icon: createTextOnlyIcon(props.label, props.textColor, props.bgColor, props.fontSize) });
-            newLayer.isTextOnly = true;
-          } else {
-            newLayer = L.marker(latlng, { icon: createCustomShapeIcon(props.iconType, props.color, props.markerSize) });
-          }
+          // GeoJSON は [lng, lat] なので Leaflet の {lat, lng} に戻す
+          latlng = { lat: geom.coordinates[1], lng: geom.coordinates[0] };
         } else if (geom.type === 'LineString') {
           objType = 'polyline';
-          latlngs = geom.coordinates.map(pt => L.latLng(pt[1], pt[0]));
-          newLayer = L.polyline(latlngs, {
-            color: props.color || '#ff0000',
-            weight: parseInt(props.lineWidth, 10) || 4,
-            lineCap: 'butt'
-          });
+          latlngs = geom.coordinates.map(c => ({ lat: c[1], lng: c[0] }));
         } else if (geom.type === 'Polygon') {
           objType = 'polygon';
-          latlngs = geom.coordinates[0].map(pt => L.latLng(pt[1], pt[0]));
-          newLayer = L.polygon(latlngs, {
-            color: props.color || '#ff0000',
-            fillColor: props.color || '#ff0000',
-            fillOpacity: 0.2
-          });
+          latlngs = geom.coordinates[0].map(c => ({ lat: c[1], lng: c[0] }));
         }
 
-        if (newLayer) {
-          newLayer.isTextOnly = !!props.isTextOnly;
-          newLayer.customIconType = props.iconType || 'pin';
-          newLayer.customLineType = props.lineType || 'line';
-          newLayer.customLineWidth = props.lineWidth || 4;
-          newLayer.customLabel = props.label || "";
-          newLayer.customDetailMemo = props.detailMemo || "";
-          newLayer.customColor = props.color || "#ff0000";
-          newLayer.customTextColor = props.textColor || "#000000";
-          newLayer.customBgColor = props.bgColor || "#ffffff";
-          newLayer.customMarkerSize = props.markerSize || 32;
-          newLayer.customFontSize = props.fontSize || 13;
-
-          // Firebaseへ登録して同期キーを付与
-          const newRef = mapObjectsRef.push();
-          newLayer._firebaseKey = newRef.key;
-
-          const syncData = {
-            type: objType,
-            latlng: latlng,
-            latlngs: latlngs,
-            props: props
-          };
-          await newRef.set(syncData);
-
-          drawnItems.addLayer(newLayer);
-
-          if (newLayer instanceof L.Polyline && !(newLayer instanceof L.Polygon)) {
-            updatePolylineArrowHead(newLayer);
+        const syncData = {
+          type: objType,
+          latlng: latlng,
+          latlngs: latlngs,
+          radius: radius,
+          props: {
+            isTextOnly: !!p.isTextOnly,
+            iconType: p.iconType || 'pin',
+            lineType: p.lineType || 'line',
+            lineWidth: p.lineWidth || 4,
+            label: p.label || "",
+            detailMemo: p.detailMemo || "",
+            color: p.color || "#ff0000",
+            textColor: p.textColor || "#000000",
+            bgColor: p.bgColor || "#ffffff",
+            markerSize: p.markerSize || 32,
+            fontSize: p.fontSize || 13
           }
+        };
 
-          if (newLayer instanceof L.Marker && newLayer.dragging) {
-            newLayer.dragging.enable();
-            newLayer.on('dragend', function() {
-              if (newLayer._firebaseKey) {
-                mapObjectsRef.child(newLayer._firebaseKey).update({
-                  latlng: newLayer.getLatLng()
-                });
-              }
-            });
-          }
-
-          applyTextMode(newLayer, newLayer.customLabel, newLayer.customDetailMemo, newLayer.customTextColor, newLayer.customBgColor, newLayer.customFontSize, displayMode);
-        }
+        await mapObjectsRef.push(syncData);
       }
     }
 
@@ -2399,25 +2323,16 @@
         drawnItems.removeLayer(layer);
       });
     }
+
+// ====================================================
+    // Firebase 受信同期（他の人の操作・自分の操作を画面に反映）
     // ====================================================
-    // Firebase 受信同期（他の人の操作を画面に反映）
-    // ====================================================
-    // 誰かがピンの位置や内容を編集・移動したとき
-    mapObjectsRef.on('child_changed', function(snapshot) {
+    mapObjectsRef.on('child_added', function(snapshot) {
       const key = snapshot.key;
       const data = snapshot.val();
       if (!data) return;
 
-      drawnItems.eachLayer(layer => {
-        if (layer._firebaseKey === key) {
-          // マーカーの位置更新
-          if (data.latlng && layer instanceof L.Marker) {
-            layer.setLatLng(data.latlng);
-          }
-        }
-      });
-
-      // すでに画面にある場合は二重作成しない
+      // 重複チェック
       let exists = false;
       drawnItems.eachLayer(l => {
         if (l._firebaseKey === key) exists = true;
@@ -2451,7 +2366,7 @@
             fillOpacity: 0.2
           });
         } else if (data.type === 'circle') {
-          newLayer = L.circle(data.circleLatLng, {
+          newLayer = L.circle(data.circleLatLng || data.latlng, {
             radius: data.radius || 50,
             color: p.color || '#ff0000',
             fillColor: p.color || '#ff0000',
@@ -2479,8 +2394,10 @@
             updatePolylineArrowHead(newLayer);
           }
 
-          if (newLayer instanceof L.Marker && newLayer.dragging) {
-            newLayer.dragging.enable();
+          // ドラッグ移動の同期設定
+          if (newLayer instanceof L.Marker) {
+            if (!isEditingMode) newLayer.dragging.enable();
+            
             newLayer.on('dragend', function() {
               if (newLayer._firebaseKey) {
                 mapObjectsRef.child(newLayer._firebaseKey).update({
@@ -2498,7 +2415,22 @@
       }
     });
 
-    // 誰かが削除したとき
+    // 誰かがピンをドラッグ移動させたとき
+    mapObjectsRef.on('child_changed', function(snapshot) {
+      const key = snapshot.key;
+      const data = snapshot.val();
+      if (!data) return;
+
+      drawnItems.eachLayer(layer => {
+        if (layer._firebaseKey === key) {
+          if (data.latlng && layer instanceof L.Marker) {
+            layer.setLatLng(data.latlng);
+          }
+        }
+      });
+    });
+
+    // 誰かがオブジェクトを削除したとき
     mapObjectsRef.on('child_removed', function(snapshot) {
       const key = snapshot.key;
       drawnItems.eachLayer(layer => {
