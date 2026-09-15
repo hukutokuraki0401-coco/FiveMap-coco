@@ -296,8 +296,15 @@
 </head>
 <body>
 
-    <!-- map画像変更ボタン -->
-    <button class="folder-btn" onclick="openMapSelectModal()">🗺️ マップ画像変更</button>
+    <!-- マップ画像切り替えプルダウン -->
+    <label style="display: flex; align-items: center; gap: 4px;">
+      <span>🗺️ マップ:</span>
+      <select id="mapSelectDropdown" onchange="changeSelectedMap(this.value)">
+        <option value="">-- マップを選択 --</option>
+      </select>
+    </label>
+    <!-- ドライブ画像の新規追加ボタン -->
+    <button class="folder-btn" onclick="promptAddNewDriveMap()">➕ 画像を追加</button>
     
 
     <!-- 現在選択中のアイコン形状 -->
@@ -1794,113 +1801,76 @@ console.log("🗺️ マップ画像を更新・再センタリングしまし�
       img.src = src;
     }
 
-    // Storage の初期化
-    const storage = firebase.storage();
-    const mapListRef = db.ref('registered_maps'); // 登録済みマップ一覧の同期先
+    // ====================================================
+    // Googleドライブ画像プリセット・同期管理
+    // ====================================================
+    const driveMapsRef = db.ref('drive_map_presets');
 
-    function openMapSelectModal() {
-      document.getElementById('mapSelectModal').style.display = 'flex';
-    }
-
-    function closeMapSelectModal() {
-      document.getElementById('mapSelectModal').style.display = 'none';
-      document.getElementById('newMapNameInput').value = '';
-      document.getElementById('newMapFileInput').value = '';
-    }
-
-    // 登録済みマップ一覧をリアルタイム監視してプルダウンを更新
-    mapListRef.on('value', function(snapshot) {
-      const select = document.getElementById('registeredMapsSelect');
-      select.innerHTML = '';
-      const data = snapshot.val();
-      if (!data) {
-        const opt = document.createElement('option');
-        opt.textContent = "登録されたマップがありません";
-        opt.value = "";
-        select.appendChild(opt);
-        return;
+    // Google ドライブの共有リンクを直リンクURLに自動変換する関数
+    function convertToDirectDriveUrl(inputUrl) {
+      if (!inputUrl) return "";
+      // 既に直リンク形式の場合はそのまま返す
+      if (inputUrl.includes('lh3.googleusercontent.com/d/')) {
+        return inputUrl.trim();
       }
-      Object.keys(data).forEach(key => {
-        const item = data[key];
-        const opt = document.createElement('option');
-        opt.value = item.url;
-        opt.textContent = item.name;
-        select.appendChild(opt);
-      });
-    });
+      // https://drive.google.com/file/d/{FILE_ID}/view 形式からIDを抽出
+      const match = inputUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        return `https://lh3.googleusercontent.com/d/${match[1]}`;
+      }
+      return inputUrl.trim();
+    }
 
-    // 登録リストから選んでマップを変更
-    function applySelectedRegisteredMap() {
-      const select = document.getElementById('registeredMapsSelect');
-      const url = select.value;
+    // Googleドライブ画像の追加ダイアログ
+    function promptAddNewDriveMap() {
+      const mapName = prompt("マップの表示名を入力してください:\n(例: ロスサントス市街地、カヨ・ペリコ島)");
+      if (!mapName) return;
+
+      const driveUrl = prompt("Googleドライブの「共有リンク」または直リンクを貼り付けてください:");
+      if (!driveUrl) return;
+
+      const directUrl = convertToDirectDriveUrl(driveUrl);
+
+      // Firebase にプリセットとして登録（全員のプルダウンに即時追加される）
+      const newMapKey = driveMapsRef.push();
+      newMapKey.set({
+        name: mapName,
+        url: directUrl,
+        createdAt: Date.now()
+      }).then(() => {
+        // 追加と同時にそのマップを全員の画面に切り替える
+        db.ref('current_map_image').set(directUrl);
+      }).catch(err => {
+        alert("登録に失敗しました: " + err.message);
+      });
+    }
+
+    // プルダウンでマップを変更した時の処理
+    function changeSelectedMap(url) {
       if (!url) return;
-
-      // 全員の画面に即時反映させるため current_map_image にURLをセット
-      db.ref('current_map_image').set(url, function(err) {
-        if (!err) {
-          closeMapSelectModal();
-        } else {
-          alert("マップの切り替えに失敗しました: " + err.message);
-        }
-      });
+      // Database には「画像のURL文字列（数十バイト）」だけを送るので通信枠を消費しない
+      db.ref('current_map_image').set(url);
     }
 
-    // 新規高画質マップをオリジナルのまま Storage にアップロード
-    async function uploadNewMapToStorage() {
-      const nameInput = document.getElementById('newMapNameInput');
-      const fileInput = document.getElementById('newMapFileInput');
-      const mapName = nameInput.value.trim() || "無題のマップ";
-      const file = fileInput.files[0];
+    // 登録されたマップ一覧をリアルタイム同期してプルダウンを更新
+    driveMapsRef.on('value', function(snapshot) {
+      const select = document.getElementById('mapSelectDropdown');
+      const data = snapshot.val();
+      select.innerHTML = '<option value="">-- マップを選択 --</option>';
 
-      if (!file) {
-        alert("マップ画像ファイルを選択してください。");
-        return;
-      }
-
-      const uploadBtn = document.getElementById('uploadMapBtn');
-      uploadBtn.disabled = true;
-      uploadBtn.textContent = "⏳ オリジナル画質でアップロード中...";
-
-      try {
-        // Storage にオリジナルファイルをそのまま保存
-        const storagePath = `maps/${Date.now()}_${file.name}`;
-        const fileRef = storage.ref(storagePath);
-        const snapshot = await fileRef.put(file);
-        const downloadURL = await snapshot.ref.getDownloadURL();
-
-        // 1. 登録済みマップリストに追加
-        await mapListRef.push({
-          name: mapName,
-          url: downloadURL,
-          path: storagePath,
-          createdAt: Date.now()
+      if (data) {
+        Object.keys(data).forEach(key => {
+          const item = data[key];
+          const opt = document.createElement('option');
+          opt.value = item.url;
+          opt.textContent = item.name;
+          if (item.url === currentMapImageDataUrl) {
+            opt.selected = true;
+          }
+          select.appendChild(opt);
         });
-
-        // 2. 現在のマップとして全員に同期
-        await db.ref('current_map_image').set(downloadURL);
-
-        alert(`「${mapName}」をオリジナル画質のまま登録・同期しました！`);
-        closeMapSelectModal();
-      } catch (err) {
-        alert("アップロードに失敗しました: " + err.message);
-      } finally {
-        uploadBtn.disabled = false;
-        uploadBtn.textContent = "Firebase Storage に保存して同期";
-      }
-    }
-    // Firebaseからマップ画像の変更を受信して同期
-    db.ref('current_map_image').on('value', function(snapshot) {
-      const imgData = snapshot.val();
-      if (!imgData) return;
-
-      if (imgData !== currentMapImageDataUrl) {
-        console.log("📥 新しいマップ画像を受信しました");
-        loadMapImage(imgData);
       }
     });
-    
-    loadMapImage('https://placehold.jp/30/333344/ffffff/1920x1080.png?text=Select+Your+Map+Image');
-
     // 4. データ保存・復元（GeoJSON対応）
     function buildGeoJsonObject() {
       const featureList = [];
@@ -2356,7 +2326,7 @@ console.log("🗺️ マップ画像を更新・再センタリングしまし�
         drawnItems.removeLayer(layer);
       });
     }
-// ====================================================
+    // ====================================================
     // Firebase 受信同期（他の人の操作を画面に反映）
     // ====================================================
     mapObjectsRef.on('child_added', function(snapshot) {
