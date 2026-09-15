@@ -15,7 +15,7 @@
   <!-- HTMLヘッダーに Firebase SDK を追加 -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
 
 
   <style>
@@ -296,11 +296,9 @@
 </head>
 <body>
 
-  <div id="toolbar">
-    <label style="cursor: pointer;">
-      🗺️ マップ画像変更  │ 
-      <input type="file" id="imageLoader" accept="image/*" style="display: none;">
-    </label>
+    <!-- map画像変更ボタン -->
+    <button class="folder-btn" onclick="openMapSelectModal()">🗺️ マップ画像変更</button>
+    
 
     <!-- 現在選択中のアイコン形状 -->
     <label style="display: flex; align-items: center; gap: 4px;">
@@ -462,6 +460,33 @@
     </div>
   </div>
 
+  <!-- マップ選択・追加モーダル -->
+  <div id="mapSelectModal" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 3000;">
+    <div style="background: #222; color: #eee; width: 450px; max-width: 90vw; border-radius: 8px; border: 1px solid #444; padding: 20px; box-sizing: border-box;">
+      <h3 style="margin-top: 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 8px;">🗺️ マップ画像の切り替え・登録</h3>
+      
+      <!-- 1. 登録済みマップから選択 -->
+      <label style="display: block; font-weight: bold; margin-bottom: 6px;">登録済みマップから選ぶ:</label>
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <select id="registeredMapsSelect" style="flex: 1; padding: 6px;"></select>
+        <button type="button" class="export-btn" onclick="applySelectedRegisteredMap()">変更</button>
+      </div>
+
+      <hr style="border: 0; border-top: 1px solid #444; margin: 16px 0;">
+
+      <!-- 2. 新規画像をStorageに登録 -->
+      <label style="display: block; font-weight: bold; margin-bottom: 6px;">新規マップを追加（無圧縮でアップロード）:</label>
+      <input type="text" id="newMapNameInput" placeholder="マップ名（例: カヨ・ペリコ島、ロスサントス高画質）" style="width: 100%; padding: 6px; box-sizing: border-box; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; margin-bottom: 8px;">
+      <input type="file" id="newMapFileInput" accept="image/*" style="display: block; margin-bottom: 12px; font-size: 12px;">
+      <button type="button" id="uploadMapBtn" class="folder-btn" style="width: 100%; padding: 8px;" onclick="uploadNewMapToStorage()">Firebase Storage に保存して同期</button>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <button type="button" onclick="closeMapSelectModal()" style="background: #555;">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  
   <script>
     // ====================================================
     // Firebase リアルタイム同期の初期化
@@ -1769,60 +1794,100 @@ console.log("🗺️ マップ画像を更新・再センタリングしまし�
       img.src = src;
     }
 
-    // ↓↓↓ ここから追加 ↓↓↓
-    // マップ画像選択時に圧縮してFirebaseへ送信する処理
-    document.getElementById('imageLoader').addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (!file) return;
+    // Storage の初期化
+    const storage = firebase.storage();
+    const mapListRef = db.ref('registered_maps'); // 登録済みマップ一覧の同期先
 
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        const rawSrc = event.target.result;
+    function openMapSelectModal() {
+      document.getElementById('mapSelectModal').style.display = 'flex';
+    }
 
-        // 容量制限（Firebaseの通信上限）を回避するために長辺2048px以下にリサイズ
-        const tempImg = new Image();
-        tempImg.onload = function() {
-          const maxDim = 2048;
-          let w = tempImg.width;
-          let h = tempImg.height;
+    function closeMapSelectModal() {
+      document.getElementById('mapSelectModal').style.display = 'none';
+      document.getElementById('newMapNameInput').value = '';
+      document.getElementById('newMapFileInput').value = '';
+    }
 
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
-            }
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(tempImg, 0, 0, w, h);
-
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-
-          // 自分の画面に反映
-          loadMapImage(compressedDataUrl);
-
-          // Firebaseへ保存（相手の画面にも即時配信）
-          db.ref('current_map_image').set(compressedDataUrl, function(error) {
-            if (error) {
-              console.error("画像の同期送信に失敗しました:", error);
-              alert("画像の容量が大きすぎるため同期できませんでした。");
-            } else {
-              console.log("✅ マップ画像をFirebaseへ送信しました");
-            }
-          });
-        };
-        tempImg.src = rawSrc;
-      };
-      reader.readAsDataURL(file);
+    // 登録済みマップ一覧をリアルタイム監視してプルダウンを更新
+    mapListRef.on('value', function(snapshot) {
+      const select = document.getElementById('registeredMapsSelect');
+      select.innerHTML = '';
+      const data = snapshot.val();
+      if (!data) {
+        const opt = document.createElement('option');
+        opt.textContent = "登録されたマップがありません";
+        opt.value = "";
+        select.appendChild(opt);
+        return;
+      }
+      Object.keys(data).forEach(key => {
+        const item = data[key];
+        const opt = document.createElement('option');
+        opt.value = item.url;
+        opt.textContent = item.name;
+        select.appendChild(opt);
+      });
     });
-    // ↑↑↑ ここまで追加 ↑↑↑
 
+    // 登録リストから選んでマップを変更
+    function applySelectedRegisteredMap() {
+      const select = document.getElementById('registeredMapsSelect');
+      const url = select.value;
+      if (!url) return;
+
+      // 全員の画面に即時反映させるため current_map_image にURLをセット
+      db.ref('current_map_image').set(url, function(err) {
+        if (!err) {
+          closeMapSelectModal();
+        } else {
+          alert("マップの切り替えに失敗しました: " + err.message);
+        }
+      });
+    }
+
+    // 新規高画質マップをオリジナルのまま Storage にアップロード
+    async function uploadNewMapToStorage() {
+      const nameInput = document.getElementById('newMapNameInput');
+      const fileInput = document.getElementById('newMapFileInput');
+      const mapName = nameInput.value.trim() || "無題のマップ";
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("マップ画像ファイルを選択してください。");
+        return;
+      }
+
+      const uploadBtn = document.getElementById('uploadMapBtn');
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = "⏳ オリジナル画質でアップロード中...";
+
+      try {
+        // Storage にオリジナルファイルをそのまま保存
+        const storagePath = `maps/${Date.now()}_${file.name}`;
+        const fileRef = storage.ref(storagePath);
+        const snapshot = await fileRef.put(file);
+        const downloadURL = await snapshot.ref.getDownloadURL();
+
+        // 1. 登録済みマップリストに追加
+        await mapListRef.push({
+          name: mapName,
+          url: downloadURL,
+          path: storagePath,
+          createdAt: Date.now()
+        });
+
+        // 2. 現在のマップとして全員に同期
+        await db.ref('current_map_image').set(downloadURL);
+
+        alert(`「${mapName}」をオリジナル画質のまま登録・同期しました！`);
+        closeMapSelectModal();
+      } catch (err) {
+        alert("アップロードに失敗しました: " + err.message);
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = "Firebase Storage に保存して同期";
+      }
+    }
     // Firebaseからマップ画像の変更を受信して同期
     db.ref('current_map_image').on('value', function(snapshot) {
       const imgData = snapshot.val();
