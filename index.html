@@ -1733,10 +1733,11 @@
       layer._firebaseKey = newRef.key;
       newRef.set(objData);
     });
-
 // 3. マップ画像読み込み（リセット・再センタリング対応版）
     function loadMapImage(src) {
+      if (!src) return;
       const img = new Image();
+      img.crossOrigin = 'anonymous'; // キャッシュ・CORS対策
       img.onload = function() {
         const w = this.width;
         const h = this.height;
@@ -1768,83 +1769,87 @@
           });
         }
 
-console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
+        console.log("🗺️ マップ画像を更新・再センタリングしました:", w, "x", h);
+      };
+      img.onerror = function() {
+        console.error("画像の読み込みに失敗しました。URLを確認してください:", src);
       };
       img.src = src;
     }
 
-    // Firebaseからマップ画像の変更を受信して同期（このブロックを追加）
+    // Firebaseからマップ画像の変更を受信して全員の画面を即時切り替え
     db.ref('current_map_image').on('value', function(snapshot) {
       const imgData = snapshot.val();
       if (!imgData) return;
 
       if (imgData !== currentMapImageDataUrl) {
-        console.log("📥 新しいマップ画像を受信しました");
+        console.log("📥 新しいマップ画像を受信しました:", imgData);
         loadMapImage(imgData);
+
+        // プルダウンの選択状態も連動させる
+        const select = document.getElementById('mapSelectDropdown');
+        if (select && select.value !== imgData) {
+          select.value = imgData;
+        }
       }
     });
 
-  // 初期ダミー画像の読み込み（ページを開いた瞬間に真っ黒にならないようにする）
-  loadMapImage('https://placehold.jp/30/333344/ffffff/1920x1080.png?text=Select+Your+Map+Image');
-    
+    // 初期マップ画像の指定
+    loadMapImage('https://placehold.jp/30/333344/ffffff/1920x1080.png?text=Select+Your+Map+Image');
+
     // ====================================================
-    // Googleドライブ画像プリセット・同期管理
+    // マッププリセット・同期管理
     // ====================================================
     const driveMapsRef = db.ref('drive_map_presets');
 
-    // Google ドライブの共有リンクを強制最高画質の直リンクURLに変換する関数
-    function convertToDirectDriveUrl(inputUrl) {
+    // URLの入力補正（GoogleドライブのURLが入ってきた場合も可能な限り生画像リンクへ変換）
+    function formatMapUrl(inputUrl) {
       if (!inputUrl) return "";
-      let fileId = null;
+      let url = inputUrl.trim();
 
-      // 共有URL形式 (/d/XXXX/view など) からIDを取り出す
-      const match1 = inputUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (match1 && match1[1]) {
-        fileId = match1[1];
-      } else {
-        // id=XXXX 形式から取り出す
-        const match2 = inputUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-        if (match2 && match2[1]) {
-          fileId = match2[1];
-        }
+      // Googleドライブ形式のURLの場合
+      const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        return `https://lh3.googleusercontent.com/d/${match[1]}=s0`;
       }
-
-      if (fileId) {
-        // Googleの再圧縮・縮小を一切通さず、元の生ファイルを直で読み込むURL
-        return `https://drive.google.com/uc?export=download&id=${fileId}`;
-      }
-
-      return inputUrl.trim();
+      return url;
     }
 
-    // Googleドライブ画像の追加ダイアログ
+    // 「➕ 画像を追加」ボタン処理
     function promptAddNewDriveMap() {
-      const mapName = prompt("マップの表示名を入力してください:\n(例: ロスサントス市街地、カヨ・ペリコ島)");
+      const mapName = prompt("マップの表示名を入力してください:\n(例: ロスサントス高画質、カヨ・ペリコ島)");
       if (!mapName) return;
 
-      const driveUrl = prompt("Googleドライブの「共有リンク」または直リンクを貼り付けてください:");
-      if (!driveUrl) return;
+      const inputUrl = prompt(
+        "画像のURLまたはパスを入力してください:\n" +
+        "・GitHubに置いたファイル: ./map.png\n" +
+        "・GoogleドライブやWeb上の画像: URLをそのまま貼り付け"
+      );
+      if (!inputUrl) return;
 
-      const directUrl = convertToDirectDriveUrl(driveUrl);
+      const targetUrl = formatMapUrl(inputUrl);
 
-      // Firebase にプリセットとして登録（全員のプルダウンに即時追加される）
+      // Firebase にプリセット登録
       const newMapKey = driveMapsRef.push();
       newMapKey.set({
         name: mapName,
-        url: directUrl,
+        url: targetUrl,
         createdAt: Date.now()
       }).then(() => {
-        // 追加と同時にそのマップを全員の画面に切り替える
-        db.ref('current_map_image').set(directUrl);
+        // 追加と同時にそのマップへ切り替え（全員へ通知）
+        db.ref('current_map_image').set(targetUrl);
+        loadMapImage(targetUrl);
       }).catch(err => {
         alert("登録に失敗しました: " + err.message);
       });
     }
 
-    // プルダウンでマップを変更した時の処理
+    // プルダウンでマップを変更したときの処理
     function changeSelectedMap(url) {
       if (!url) return;
-      // Database には「画像のURL文字列（数十バイト）」だけを送るので通信枠を消費しない
+      // 自分の画面を切り替え
+      loadMapImage(url);
+      // 他のメンバー全員に通知
       db.ref('current_map_image').set(url);
     }
 
