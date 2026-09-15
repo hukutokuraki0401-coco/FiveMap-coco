@@ -803,8 +803,11 @@
         // 1. 平面画像用マップの初期化
     const map = L.map('map', {
       crs: L.CRS.Simple,
-      minZoom: -2,
-      maxZoom: 2,
+      minZoom: -3,
+      maxZoom: 3,
+      zoomDelta: 0.25, // ボタン1回で動くズーム量
+      zoomSnap: 0.25,  // ズームの刻み幅
+      wheelPxPerZoomLevel: 120, // マウスホイールでの拡大縮小も滑らかにする
       closePopupOnClick: false
     });
 
